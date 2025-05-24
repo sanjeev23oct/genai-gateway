@@ -914,11 +914,30 @@ class PresidioGatewayHandler(http.server.BaseHTTPRequestHandler):
                 self.send_error(400, f"Invalid JSON: {str(e)}")
                 return
 
-            # Extract text content
+            # Extract text content with type safety
             text_content = ""
             messages = request_data.get('messages', [])
-            for msg in messages:
-                text_content += msg.get('content', '') + " "
+            print(f"  Processing {len(messages)} messages")
+
+            for i, msg in enumerate(messages):
+                content = msg.get('content', '')
+                print(f"    Message {i}: type={type(content)}, content={repr(content)[:100]}")
+
+                # Handle different content types
+                if isinstance(content, str):
+                    text_content += content + " "
+                elif isinstance(content, list):
+                    # Handle list of content parts (multimodal)
+                    for part in content:
+                        if isinstance(part, dict) and 'text' in part:
+                            text_content += part['text'] + " "
+                        elif isinstance(part, str):
+                            text_content += part + " "
+                else:
+                    # Convert to string as fallback
+                    text_content += str(content) + " "
+
+            print(f"  Final text_content: {repr(text_content[:200])}...")
 
             # Enhanced security scan with Presidio
             if not self.detector:
