@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  gateway:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_BASE_URL=https://api.deepseek.com
+      - GATEWAY_HOST=0.0.0.0
+      - GATEWAY_PORT=8000
+      - LOG_LEVEL=INFO
+      - ENABLE_PII_DETECTION=true
+      - ENABLE_SECRET_DETECTION=true
+      - BLOCK_ON_DETECTION=true
+      - ENABLE_AUDIT_LOGGING=true
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
