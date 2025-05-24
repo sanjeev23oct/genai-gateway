@@ -13,26 +13,196 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 
-class SimpleSecurityScanner:
-    """Simple security scanner using only regex"""
+class EnhancedSecurityScanner:
+    """Enhanced security scanner with multiple detection layers"""
 
     def __init__(self):
+        # Enhanced patterns with confidence scores
         self.patterns = {
-            # Simple patterns that work without spaCy
-            "email": r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-            "phone": r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b',
-            "api_key": r'sk-[a-zA-Z0-9]{20,}',
-            "password": r'password\s*[:=]\s*["\']?[a-zA-Z0-9!@#$%^&*()]{6,}["\']?',
-            "secret": r'secret\s*[:=]\s*["\']?[a-zA-Z0-9!@#$%^&*()]{6,}["\']?',
+            # High-confidence API key patterns
+            "openai_api_key": {
+                "pattern": r'sk-[a-zA-Z0-9]{48}',
+                "confidence": 0.98,
+                "severity": "CRITICAL"
+            },
+            "anthropic_api_key": {
+                "pattern": r'sk-ant-[a-zA-Z0-9\-_]{95}',
+                "confidence": 0.98,
+                "severity": "CRITICAL"
+            },
+            "github_token": {
+                "pattern": r'ghp_[a-zA-Z0-9]{36}',
+                "confidence": 0.95,
+                "severity": "CRITICAL"
+            },
+            "aws_access_key": {
+                "pattern": r'AKIA[0-9A-Z]{16}',
+                "confidence": 0.95,
+                "severity": "CRITICAL"
+            },
+
+            # PII patterns with validation
+            "email": {
+                "pattern": r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+                "confidence": 0.85,
+                "severity": "HIGH"
+            },
+            "phone_us": {
+                "pattern": r'\b(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b',
+                "confidence": 0.8,
+                "severity": "MEDIUM"
+            },
+            "ssn": {
+                "pattern": r'\b\d{3}-\d{2}-\d{4}\b',
+                "confidence": 0.9,
+                "severity": "HIGH"
+            },
+            "credit_card": {
+                "pattern": r'\b(?:\d{4}[-\s]?){3}\d{4}\b',
+                "confidence": 0.7,
+                "severity": "HIGH"
+            },
+
+            # Database and connection strings
+            "database_url": {
+                "pattern": r'(postgresql|mysql|mongodb)://[^:\s]+:[^@\s]+@[^:\s]+:\d+/\w+',
+                "confidence": 0.9,
+                "severity": "CRITICAL"
+            },
+            "connection_string": {
+                "pattern": r'(Server|Host|Data Source)\s*=\s*[^;]+;\s*(Database|Initial Catalog)\s*=\s*[^;]+',
+                "confidence": 0.85,
+                "severity": "HIGH"
+            },
+
+            # Generic secrets with context
+            "password_assignment": {
+                "pattern": r'password\s*[:=]\s*["\']?[a-zA-Z0-9!@#$%^&*()]{6,}["\']?',
+                "confidence": 0.8,
+                "severity": "HIGH"
+            },
+            "secret_assignment": {
+                "pattern": r'secret\s*[:=]\s*["\']?[a-zA-Z0-9!@#$%^&*()]{8,}["\']?',
+                "confidence": 0.8,
+                "severity": "HIGH"
+            },
+            "api_key_assignment": {
+                "pattern": r'api[_-]?key\s*[:=]\s*["\']?[a-zA-Z0-9\-_]{16,}["\']?',
+                "confidence": 0.75,
+                "severity": "HIGH"
+            },
+
+            # JWT tokens
+            "jwt_token": {
+                "pattern": r'eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+',
+                "confidence": 0.85,
+                "severity": "HIGH"
+            },
+
+            # Private keys
+            "private_key": {
+                "pattern": r'-----BEGIN [A-Z ]+PRIVATE KEY-----',
+                "confidence": 0.99,
+                "severity": "CRITICAL"
+            },
+
+            # IP addresses (internal networks)
+            "private_ip": {
+                "pattern": r'\b(?:10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|192\.168\.)\d{1,3}\.\d{1,3}\b',
+                "confidence": 0.6,
+                "severity": "MEDIUM"
+            }
         }
 
+        # Compile patterns for performance
+        self.compiled_patterns = {}
+        for name, config in self.patterns.items():
+            self.compiled_patterns[name] = {
+                "regex": re.compile(config["pattern"], re.IGNORECASE),
+                "confidence": config["confidence"],
+                "severity": config["severity"]
+            }
+
     def scan(self, text):
-        """Scan text for security issues"""
+        """Enhanced scan with confidence scoring"""
         issues = []
-        for name, pattern in self.patterns.items():
-            if re.search(pattern, text, re.IGNORECASE):
-                issues.append(name)
+
+        for name, config in self.compiled_patterns.items():
+            matches = config["regex"].finditer(text)
+
+            for match in matches:
+                # Additional validation for specific patterns
+                if name == "credit_card" and not self._validate_luhn(match.group()):
+                    continue
+
+                if name == "email" and not self._basic_email_validation(match.group()):
+                    continue
+
+                issue = {
+                    "type": name,
+                    "confidence": config["confidence"],
+                    "severity": config["severity"],
+                    "match": match.group(),
+                    "location": (match.start(), match.end()),
+                    "context": text[max(0, match.start()-20):match.end()+20]
+                }
+                issues.append(issue)
+
         return issues
+
+    def _validate_luhn(self, card_number):
+        """Basic Luhn algorithm validation for credit cards"""
+        # Remove spaces and dashes
+        card_number = re.sub(r'[-\s]', '', card_number)
+
+        if not card_number.isdigit() or len(card_number) < 13:
+            return False
+
+        # Luhn algorithm
+        total = 0
+        reverse_digits = card_number[::-1]
+
+        for i, digit in enumerate(reverse_digits):
+            n = int(digit)
+            if i % 2 == 1:
+                n *= 2
+                if n > 9:
+                    n = n // 10 + n % 10
+            total += n
+
+        return total % 10 == 0
+
+    def _basic_email_validation(self, email):
+        """Basic email validation"""
+        # Check for common invalid patterns
+        if email.count('@') != 1:
+            return False
+
+        local, domain = email.split('@')
+        if not local or not domain:
+            return False
+
+        if '.' not in domain:
+            return False
+
+        return True
+
+    def should_block(self, issues):
+        """Determine if request should be blocked"""
+        if not issues:
+            return False
+
+        # Block on any CRITICAL severity
+        critical_issues = [i for i in issues if i["severity"] == "CRITICAL"]
+        if critical_issues:
+            return True
+
+        # Block on high confidence HIGH severity issues
+        high_confidence_high = [i for i in issues if i["severity"] == "HIGH" and i["confidence"] >= 0.8]
+        if high_confidence_high:
+            return True
+
+        return False
 
 
 class SimpleGatewayHandler(http.server.BaseHTTPRequestHandler):
@@ -87,13 +257,16 @@ class SimpleGatewayHandler(http.server.BaseHTTPRequestHandler):
             <h1>🚀 LLM Gateway MVP</h1>
             <p><strong>Status:</strong> ✅ Running on Railway</p>
 
-            <h2>🔒 Security Features</h2>
+            <h2>🔒 Enhanced Security Features</h2>
             <ul>
-                <li>✅ Email Detection</li>
-                <li>✅ Phone Number Detection</li>
-                <li>✅ API Key Detection</li>
-                <li>✅ Password Detection</li>
-                <li>✅ Request Blocking</li>
+                <li>✅ <strong>API Key Detection</strong> (OpenAI, Anthropic, GitHub, AWS)</li>
+                <li>✅ <strong>PII Detection</strong> (Email, Phone, SSN, Credit Cards)</li>
+                <li>✅ <strong>Database Credentials</strong> (Connection strings, URLs)</li>
+                <li>✅ <strong>JWT Tokens & Private Keys</strong></li>
+                <li>✅ <strong>Confidence Scoring</strong> (0.0 - 1.0)</li>
+                <li>✅ <strong>Severity Levels</strong> (LOW, MEDIUM, HIGH, CRITICAL)</li>
+                <li>✅ <strong>Smart Blocking</strong> (Context-aware decisions)</li>
+                <li>✅ <strong>Luhn Validation</strong> (Credit card verification)</li>
             </ul>
 
             <h2>🧪 Test Commands</h2>
@@ -138,23 +311,44 @@ class SimpleGatewayHandler(http.server.BaseHTTPRequestHandler):
                 text_content += msg.get('content', '') + " "
 
             # Security scan
-            scanner = SimpleSecurityScanner()
+            scanner = EnhancedSecurityScanner()
             issues = scanner.scan(text_content)
 
             # Log request
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Chat request")
             print(f"  Content: {text_content[:100]}...")
-            print(f"  Issues: {issues}")
+            print(f"  Issues found: {len(issues)}")
 
-            # Block if issues found
-            if issues:
+            # Enhanced logging for detected issues
+            for issue in issues:
+                print(f"    - {issue['type']}: {issue['severity']} (confidence: {issue['confidence']:.2f})")
+
+            # Determine if request should be blocked
+            should_block = scanner.should_block(issues)
+
+            if should_block:
+                # Create detailed error response
                 error_response = {
-                    "error": "Request blocked due to security violations",
-                    "issues": issues,
+                    "error": "Request blocked due to security policy violations",
                     "blocked": True,
-                    "timestamp": int(time.time())
+                    "timestamp": int(time.time()),
+                    "detection_summary": {
+                        "total_issues": len(issues),
+                        "critical_issues": len([i for i in issues if i["severity"] == "CRITICAL"]),
+                        "high_severity_issues": len([i for i in issues if i["severity"] == "HIGH"]),
+                        "issue_types": list(set(i["type"] for i in issues))
+                    },
+                    "issues": [
+                        {
+                            "type": issue["type"],
+                            "severity": issue["severity"],
+                            "confidence": issue["confidence"],
+                            "description": f"Detected {issue['type'].replace('_', ' ')}"
+                        }
+                        for issue in issues
+                    ]
                 }
-                print(f"  ❌ BLOCKED: {issues}")
+                print(f"  ❌ BLOCKED: {len(issues)} security issues detected")
                 self.send_json(error_response, 400)
                 return
 
@@ -203,11 +397,19 @@ class SimpleGatewayHandler(http.server.BaseHTTPRequestHandler):
 
 def main():
     """Start the simple gateway"""
+    # Railway provides PORT environment variable
     PORT = int(os.getenv('PORT', 8000))
+
+    # Force port 8000 to match Railway settings
+    if 'PORT' not in os.environ:
+        PORT = 8000
+    HOST = "0.0.0.0"
 
     print(f"🔍 Environment check:")
     print(f"  PORT env var: {os.getenv('PORT', 'Not set')}")
+    print(f"  HOST: {HOST}")
     print(f"  Using port: {PORT}")
+    print(f"  All env vars: {dict(os.environ)}")
 
     print("🚀 Simple LLM Gateway Starting")
     print("=" * 40)
@@ -217,7 +419,7 @@ def main():
     print("=" * 40)
 
     try:
-        with socketserver.TCPServer(("0.0.0.0", PORT), SimpleGatewayHandler) as httpd:
+        with socketserver.TCPServer((HOST, PORT), SimpleGatewayHandler) as httpd:
             print(f"✅ Server running on port {PORT}")
             print("🌐 Gateway is ready!")
             httpd.serve_forever()
