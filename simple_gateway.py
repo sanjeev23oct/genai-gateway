@@ -236,15 +236,24 @@ class SimpleGatewayHandler(http.server.BaseHTTPRequestHandler):
         """Send health response"""
         response = {
             "status": "healthy",
-            "version": "1.0.0-simple",
+            "version": "1.0.0-enhanced",
             "timestamp": int(time.time()),
             "message": "LLM Gateway is running on Railway!",
             "features": [
-                "PII Detection",
-                "Secret Detection",
-                "Request Blocking",
-                "Mock Responses"
-            ]
+                "Enhanced PII Detection",
+                "API Key Detection",
+                "Database Credential Detection",
+                "JWT Token Detection",
+                "Confidence Scoring",
+                "Severity Classification",
+                "Smart Request Blocking",
+                "Luhn Credit Card Validation"
+            ],
+            "security_stats": {
+                "total_patterns": 15,
+                "severity_levels": ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+                "confidence_range": "0.0 - 1.0"
+            }
         }
         self.send_json(response)
 
@@ -252,24 +261,24 @@ class SimpleGatewayHandler(http.server.BaseHTTPRequestHandler):
         """Send welcome page"""
         html = """
         <html>
-        <head><title>🚀 LLM Gateway - Railway</title></head>
+        <head><title>LLM Gateway - Railway</title></head>
         <body style="font-family: Arial; max-width: 800px; margin: 50px auto; padding: 20px;">
-            <h1>🚀 LLM Gateway MVP</h1>
-            <p><strong>Status:</strong> ✅ Running on Railway</p>
+            <h1>LLM Gateway MVP</h1>
+            <p><strong>Status:</strong> Running on Railway</p>
 
-            <h2>🔒 Enhanced Security Features</h2>
+            <h2>Enhanced Security Features</h2>
             <ul>
-                <li>✅ <strong>API Key Detection</strong> (OpenAI, Anthropic, GitHub, AWS)</li>
-                <li>✅ <strong>PII Detection</strong> (Email, Phone, SSN, Credit Cards)</li>
-                <li>✅ <strong>Database Credentials</strong> (Connection strings, URLs)</li>
-                <li>✅ <strong>JWT Tokens & Private Keys</strong></li>
-                <li>✅ <strong>Confidence Scoring</strong> (0.0 - 1.0)</li>
-                <li>✅ <strong>Severity Levels</strong> (LOW, MEDIUM, HIGH, CRITICAL)</li>
-                <li>✅ <strong>Smart Blocking</strong> (Context-aware decisions)</li>
-                <li>✅ <strong>Luhn Validation</strong> (Credit card verification)</li>
+                <li><strong>API Key Detection</strong> (OpenAI, Anthropic, GitHub, AWS)</li>
+                <li><strong>PII Detection</strong> (Email, Phone, SSN, Credit Cards)</li>
+                <li><strong>Database Credentials</strong> (Connection strings, URLs)</li>
+                <li><strong>JWT Tokens & Private Keys</strong></li>
+                <li><strong>Confidence Scoring</strong> (0.0 - 1.0)</li>
+                <li><strong>Severity Levels</strong> (LOW, MEDIUM, HIGH, CRITICAL)</li>
+                <li><strong>Smart Blocking</strong> (Context-aware decisions)</li>
+                <li><strong>Luhn Validation</strong> (Credit card verification)</li>
             </ul>
 
-            <h2>🧪 Test Commands</h2>
+            <h2>Test Commands</h2>
             <h3>Health Check:</h3>
             <pre>curl https://genai-gateway-production.up.railway.app/health</pre>
 
@@ -283,7 +292,7 @@ class SimpleGatewayHandler(http.server.BaseHTTPRequestHandler):
   -H "Content-Type: application/json" \\
   -d '{"messages": [{"role": "user", "content": "My email is test@example.com"}]}'</pre>
 
-            <p><em>✨ Deployed on Railway • No external dependencies</em></p>
+            <p><em>Deployed on Railway - No external dependencies</em></p>
         </body>
         </html>
         """
@@ -348,7 +357,7 @@ class SimpleGatewayHandler(http.server.BaseHTTPRequestHandler):
                         for issue in issues
                     ]
                 }
-                print(f"  ❌ BLOCKED: {len(issues)} security issues detected")
+                print(f"  BLOCKED: {len(issues)} security issues detected")
                 self.send_json(error_response, 400)
                 return
 
@@ -362,7 +371,7 @@ class SimpleGatewayHandler(http.server.BaseHTTPRequestHandler):
                     "index": 0,
                     "message": {
                         "role": "assistant",
-                        "content": f"✅ Gateway working! Processed {len(messages)} message(s) safely. This is a mock response - add DEEPSEEK_API_KEY for real responses."
+                        "content": f"Gateway working! Processed {len(messages)} message(s) safely. This is a mock response - add DEEPSEEK_API_KEY for real responses."
                     },
                     "finish_reason": "stop"
                 }],
@@ -373,13 +382,13 @@ class SimpleGatewayHandler(http.server.BaseHTTPRequestHandler):
                 }
             }
 
-            print(f"  ✅ SUCCESS: Mock response sent")
+            print(f"  SUCCESS: Mock response sent")
             self.send_json(response)
 
         except json.JSONDecodeError:
             self.send_error(400, "Invalid JSON")
         except Exception as e:
-            print(f"  ❌ ERROR: {e}")
+            print(f"  ERROR: {e}")
             self.send_error(500, str(e))
 
     def send_json(self, data, status=200):
@@ -411,20 +420,21 @@ def main():
     print(f"  Using port: {PORT}")
     print(f"  All env vars: {dict(os.environ)}")
 
-    print("🚀 Simple LLM Gateway Starting")
+    print("Enhanced LLM Gateway Starting")
     print("=" * 40)
     print(f"Port: {PORT}")
-    print(f"Features: Security scanning, Mock responses")
+    print(f"Features: Enhanced security scanning, Mock responses")
     print(f"Dependencies: None (Python built-ins only)")
+    print(f"Security Patterns: 15 detection rules")
     print("=" * 40)
 
     try:
         with socketserver.TCPServer((HOST, PORT), SimpleGatewayHandler) as httpd:
-            print(f"✅ Server running on port {PORT}")
-            print("🌐 Gateway is ready!")
+            print(f"Server running on port {PORT}")
+            print("Gateway is ready!")
             httpd.serve_forever()
     except Exception as e:
-        print(f"❌ Server error: {e}")
+        print(f"Server error: {e}")
 
 
 if __name__ == "__main__":
