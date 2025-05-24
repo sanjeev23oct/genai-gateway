@@ -373,7 +373,10 @@ class PresidioSecurityDetector:
             false_positives = {
                 'you', 'i', 'me', 'we', 'they', 'he', 'she', 'it',
                 'today', 'tomorrow', 'yesterday', 'now', 'here', 'there',
-                'hello', 'hi', 'hey', 'thanks', 'please', 'yes', 'no'
+                'hello', 'hi', 'hey', 'thanks', 'please', 'yes', 'no',
+                'task', 'code', 'help', 'how', 'what', 'when', 'where', 'why',
+                'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to',
+                'for', 'with', 'by', 'from', 'about', 'into', 'through', 'during'
             }
 
             issues = []
@@ -390,6 +393,10 @@ class PresidioSecurityDetector:
 
                 # Filter out very low confidence PERSON detections
                 if result.entity_type == "PERSON" and result.score < 0.7:
+                    continue
+
+                # Filter out development-related false positives
+                if self._is_development_context(entity_text, text):
                     continue
 
                 # Map Presidio confidence to our severity levels
@@ -489,25 +496,28 @@ class PresidioSecurityDetector:
             return DetectionLevel.LOW
 
     def should_block_request(self, issues: List[SecurityIssue]) -> bool:
-        """Determine if request should be blocked with more reasonable thresholds"""
+        """Determine if request should be blocked with very conservative thresholds"""
         if not issues:
             return False
 
-        # Block on any CRITICAL issues (API keys, private keys, etc.)
+        # Only block on CRITICAL issues (API keys, private keys, database credentials)
         critical_issues = [i for i in issues if i.severity == DetectionLevel.CRITICAL]
         if critical_issues:
             self.stats['blocked_requests'] += 1
             return True
 
-        # Block on very high confidence HIGH severity issues (SSN, credit cards, etc.)
-        very_high_confidence_high = [i for i in issues if i.severity == DetectionLevel.HIGH and i.confidence >= 0.9]
-        if very_high_confidence_high:
-            self.stats['blocked_requests'] += 1
-            return True
+        # Block on extremely high confidence HIGH severity issues (real SSN, validated credit cards)
+        extremely_high_confidence = [i for i in issues if i.severity == DetectionLevel.HIGH and i.confidence >= 0.95]
+        if extremely_high_confidence:
+            # Additional check: only block if it's not a common word
+            for issue in extremely_high_confidence:
+                entity_text = issue.entity_text.lower().strip()
+                if len(entity_text) > 3 and entity_text not in {'task', 'code', 'help', 'hello', 'thanks'}:
+                    self.stats['blocked_requests'] += 1
+                    return True
 
-        # Don't block on common words that Presidio might detect as names
-        # Allow MEDIUM severity issues (like common names, pronouns)
-        # Allow LOW confidence detections
+        # Allow everything else - be very permissive for normal conversation
+        # Only block obvious secrets and credentials
 
         return False
 
@@ -544,6 +554,48 @@ class PresidioSecurityDetector:
             total += n
 
         return total % 10 == 0
+
+    def _is_development_context(self, entity_text: str, full_text: str) -> bool:
+        """Check if detected entity is in development/coding context"""
+        entity_lower = entity_text.lower()
+        full_lower = full_text.lower()
+
+        # Development-related keywords in context
+        dev_keywords = [
+            'vscode', 'visual studio', 'file', 'directory', 'folder', 'path',
+            'github', 'git', 'repository', 'repo', 'branch', 'commit',
+            'python', 'javascript', 'typescript', 'react', 'node', 'npm',
+            'environment_details', 'current working directory', 'open tabs',
+            'visible files', 'architecture', 'deployment', 'gateway',
+            'procfile', 'requirements', 'readme', 'markdown', '.py', '.js',
+            '.md', '.txt', '.json', '.yml', '.yaml', 'appdata', 'programs'
+        ]
+
+        # Check if any dev keywords are in the surrounding context
+        context_has_dev = any(keyword in full_lower for keyword in dev_keywords)
+
+        if context_has_dev:
+            # Common development-related entities to allow
+            dev_entities = [
+                'dell',  # Common username
+                'users', 'user', 'admin', 'local', 'programs',
+                'microsoft', 'vscode', 'code', 'untitled',
+                'appdata', 'roaming', 'temp', 'documents',
+                'desktop', 'downloads', 'pictures'
+            ]
+
+            if entity_lower in dev_entities:
+                return True
+
+            # File extensions and paths
+            if any(ext in entity_lower for ext in ['.py', '.js', '.md', '.txt', '.json']):
+                return True
+
+            # Path-like patterns
+            if '/' in entity_text or '\\' in entity_text or '..' in entity_text:
+                return True
+
+        return False
 
     def _update_performance_stats(self, scan_time: float):
         """Update performance statistics"""
