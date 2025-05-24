@@ -599,6 +599,8 @@ class PresidioGatewayHandler(http.server.BaseHTTPRequestHandler):
             self.send_stats()
         elif self.path == '/presidio-status':
             self.send_presidio_status()
+        elif self.path == '/v1/models':
+            self.send_models()
         elif self.path == '/':
             self.send_welcome()
         else:
@@ -607,8 +609,19 @@ class PresidioGatewayHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         """Handle POST requests"""
         if self.path == '/v1/chat/completions':
-            # Run async handler in sync context
-            asyncio.run(self.handle_chat_async())
+            try:
+                # Run async handler in sync context with proper error handling
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(self.handle_chat_async())
+                finally:
+                    loop.close()
+            except Exception as e:
+                print(f"Error in chat handler: {e}")
+                import traceback
+                traceback.print_exc()
+                self.send_error(500, f"Internal server error: {str(e)}")
         else:
             self.send_error(404)
 
@@ -679,6 +692,68 @@ class PresidioGatewayHandler(http.server.BaseHTTPRequestHandler):
             "custom_patterns_count": len(self.detector.custom_patterns) if self.detector else 0
         }
         self.send_json(status)
+
+    def send_models(self):
+        """Send available models list (OpenAI API compatible)"""
+        # Check if we have DeepSeek configured
+        deepseek_key = os.getenv('DEEPSEEK_API_KEY')
+
+        models = {
+            "object": "list",
+            "data": [
+                {
+                    "id": "gpt-3.5-turbo",
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": "presidio-gateway",
+                    "permission": [],
+                    "root": "gpt-3.5-turbo",
+                    "parent": None
+                },
+                {
+                    "id": "gpt-4",
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": "presidio-gateway",
+                    "permission": [],
+                    "root": "gpt-4",
+                    "parent": None
+                },
+                {
+                    "id": "deepseek-chat",
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": "presidio-gateway",
+                    "permission": [],
+                    "root": "deepseek-chat",
+                    "parent": None
+                },
+                {
+                    "id": "presidio-enhanced-gateway",
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": "presidio-gateway",
+                    "permission": [],
+                    "root": "presidio-enhanced-gateway",
+                    "parent": None
+                }
+            ]
+        }
+
+        # Add status information
+        if deepseek_key:
+            models["gateway_status"] = "DeepSeek API configured - real responses available"
+        else:
+            models["gateway_status"] = "Mock mode - add DEEPSEEK_API_KEY for real responses"
+
+        models["security_features"] = {
+            "presidio_ml_detection": PRESIDIO_AVAILABLE,
+            "custom_pattern_detection": True,
+            "pii_protection": True,
+            "api_key_detection": True
+        }
+
+        self.send_json(models)
 
     def send_welcome(self):
         """Enhanced welcome page with Presidio information"""
