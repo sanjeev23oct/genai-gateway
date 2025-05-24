@@ -347,7 +347,7 @@ class PresidioSecurityDetector:
             return []
 
     async def _presidio_scan(self, text: str) -> List[SecurityIssue]:
-        """Scan using Microsoft Presidio"""
+        """Scan using Microsoft Presidio with smart filtering"""
         if not self.presidio_analyzer:
             return []
 
@@ -369,8 +369,29 @@ class PresidioSecurityDetector:
                 language='en'
             )
 
+            # Common false positives to filter out
+            false_positives = {
+                'you', 'i', 'me', 'we', 'they', 'he', 'she', 'it',
+                'today', 'tomorrow', 'yesterday', 'now', 'here', 'there',
+                'hello', 'hi', 'hey', 'thanks', 'please', 'yes', 'no'
+            }
+
             issues = []
             for result in results:
+                entity_text = text[result.start:result.end].lower().strip()
+
+                # Filter out common false positives
+                if result.entity_type == "PERSON" and entity_text in false_positives:
+                    continue
+
+                # Filter out single character detections
+                if len(entity_text) <= 1:
+                    continue
+
+                # Filter out very low confidence PERSON detections
+                if result.entity_type == "PERSON" and result.score < 0.7:
+                    continue
+
                 # Map Presidio confidence to our severity levels
                 severity = self._confidence_to_severity(result.score)
 
@@ -382,11 +403,11 @@ class PresidioSecurityDetector:
                     severity=severity,
                     context=text[max(0, result.start-20):result.end+20],
                     detector="presidio",
-                    entity_text=text[result.start:result.end]
+                    entity_text=entity_text
                 )
                 issues.append(issue)
 
-            logger.debug(f"🔍 Presidio found {len(issues)} issues")
+            logger.debug(f"🔍 Presidio found {len(issues)} issues after filtering")
             return issues
 
         except Exception as e:
@@ -468,21 +489,25 @@ class PresidioSecurityDetector:
             return DetectionLevel.LOW
 
     def should_block_request(self, issues: List[SecurityIssue]) -> bool:
-        """Determine if request should be blocked"""
+        """Determine if request should be blocked with more reasonable thresholds"""
         if not issues:
             return False
 
-        # Block on any CRITICAL issues
+        # Block on any CRITICAL issues (API keys, private keys, etc.)
         critical_issues = [i for i in issues if i.severity == DetectionLevel.CRITICAL]
         if critical_issues:
             self.stats['blocked_requests'] += 1
             return True
 
-        # Block on high confidence HIGH severity issues
-        high_confidence_high = [i for i in issues if i.severity == DetectionLevel.HIGH and i.confidence >= 0.8]
-        if high_confidence_high:
+        # Block on very high confidence HIGH severity issues (SSN, credit cards, etc.)
+        very_high_confidence_high = [i for i in issues if i.severity == DetectionLevel.HIGH and i.confidence >= 0.9]
+        if very_high_confidence_high:
             self.stats['blocked_requests'] += 1
             return True
+
+        # Don't block on common words that Presidio might detect as names
+        # Allow MEDIUM severity issues (like common names, pronouns)
+        # Allow LOW confidence detections
 
         return False
 
