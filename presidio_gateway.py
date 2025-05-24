@@ -935,42 +935,113 @@ class PresidioGatewayHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(error_response, 400)
                 return
 
-            # Mock successful response
-            response = {
-                "id": f"presidio-{request_id}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": "presidio-enhanced-gateway",
-                "choices": [{
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": f"Presidio Gateway: Processed {len(messages)} message(s) with enterprise ML security. {len(issues)} low-risk issues detected but allowed. Detection powered by Microsoft Presidio + custom patterns."
-                    },
-                    "finish_reason": "stop"
-                }],
-                "usage": {
-                    "prompt_tokens": len(text_content.split()),
-                    "completion_tokens": 35,
-                    "total_tokens": len(text_content.split()) + 35
-                },
-                "security_scan": {
-                    "detection_engine": "Microsoft Presidio + Custom Patterns",
-                    "presidio_active": self.detector.presidio_analyzer is not None,
-                    "issues_detected": len(issues),
-                    "risk_level": "low" if not should_block else "high",
-                    "scan_summary": detection_summary
-                }
-            }
+            # Check if DeepSeek API key is configured
+            deepseek_key = os.getenv('DEEPSEEK_API_KEY')
 
-            print(f"  SUCCESS: Request processed with {len(issues)} low-risk issues")
-            self.send_json(response)
+            if deepseek_key:
+                # Forward to DeepSeek API
+                try:
+                    response = await self._forward_to_deepseek(request_data, deepseek_key, detection_summary, len(issues))
+                    print(f"  SUCCESS: Real DeepSeek response with {len(issues)} low-risk issues")
+                    self.send_json(response)
+                except Exception as e:
+                    print(f"  DeepSeek API Error: {e}")
+                    # Fall back to mock response if DeepSeek fails
+                    response = self._create_mock_response(request_id, messages, issues, detection_summary)
+                    print(f"  FALLBACK: Mock response due to DeepSeek error")
+                    self.send_json(response)
+            else:
+                # Mock response when no API key
+                response = self._create_mock_response(request_id, messages, issues, detection_summary)
+                print(f"  MOCK: No DeepSeek API key configured")
+                self.send_json(response)
 
         except json.JSONDecodeError:
             self.send_error(400, "Invalid JSON")
         except Exception as e:
             print(f"  ERROR: {e}")
             self.send_error(500, str(e))
+
+    async def _forward_to_deepseek(self, request_data, api_key, detection_summary, issues_count):
+        """Forward request to DeepSeek API"""
+        import urllib.request
+        import urllib.parse
+
+        # DeepSeek API endpoint
+        url = "https://api.deepseek.com/v1/chat/completions"
+
+        # Prepare headers
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {api_key}',
+            'User-Agent': 'Presidio-Gateway/3.0.0'
+        }
+
+        # Prepare request data for DeepSeek
+        deepseek_request = {
+            "model": request_data.get("model", "deepseek-chat"),
+            "messages": request_data.get("messages", []),
+            "temperature": request_data.get("temperature", 0.7),
+            "max_tokens": request_data.get("max_tokens", 1000),
+            "stream": False  # Force non-streaming for simplicity
+        }
+
+        # Make request to DeepSeek
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(deepseek_request).encode('utf-8'),
+            headers=headers
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                deepseek_response = json.loads(response.read().decode('utf-8'))
+
+            # Add security scan information to response
+            deepseek_response["security_scan"] = {
+                "detection_engine": "Microsoft Presidio + Custom Patterns",
+                "presidio_active": self.detector.presidio_analyzer is not None,
+                "issues_detected": issues_count,
+                "risk_level": "low",
+                "scan_summary": detection_summary,
+                "gateway_version": "3.0.0-presidio"
+            }
+
+            return deepseek_response
+
+        except Exception as e:
+            raise Exception(f"DeepSeek API request failed: {str(e)}")
+
+    def _create_mock_response(self, request_id, messages, issues, detection_summary):
+        """Create mock response when DeepSeek is not available"""
+        return {
+            "id": f"presidio-{request_id}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": "presidio-enhanced-gateway",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": f"Presidio Gateway: Processed {len(messages)} message(s) with enterprise ML security. {len(issues)} low-risk issues detected but allowed. Add DEEPSEEK_API_KEY for real responses."
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": sum(len(msg.get('content', '').split()) for msg in messages),
+                "completion_tokens": 25,
+                "total_tokens": sum(len(msg.get('content', '').split()) for msg in messages) + 25
+            },
+            "security_scan": {
+                "detection_engine": "Microsoft Presidio + Custom Patterns",
+                "presidio_active": self.detector.presidio_analyzer is not None,
+                "issues_detected": len(issues),
+                "risk_level": "low",
+                "scan_summary": detection_summary,
+                "gateway_version": "3.0.0-presidio",
+                "mode": "mock"
+            }
+        }
 
     def send_json(self, data, status=200):
         """Send JSON response"""
@@ -1001,6 +1072,16 @@ def main():
     print(f"Presidio Available: {'✅ Yes' if PRESIDIO_AVAILABLE else '❌ No (fallback mode)'}")
     print(f"spaCy Available: {'✅ Yes' if SPACY_AVAILABLE else '❌ No'}")
     print(f"Detection Mode: {'Hybrid (ML + Regex)' if PRESIDIO_AVAILABLE else 'Custom Patterns Only'}")
+
+    # Check DeepSeek configuration
+    deepseek_key = os.getenv('DEEPSEEK_API_KEY')
+    if deepseek_key:
+        print(f"DeepSeek API: ✅ Configured (key: ...{deepseek_key[-4:]})")
+        print(f"Response Mode: Real DeepSeek responses")
+    else:
+        print(f"DeepSeek API: ❌ Not configured")
+        print(f"Response Mode: Mock responses (add DEEPSEEK_API_KEY for real responses)")
+
     print("=" * 60)
 
     # Initialize detector
