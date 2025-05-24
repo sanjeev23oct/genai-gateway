@@ -109,6 +109,15 @@ class PresidioSecurityDetector:
         try:
             logger.info("🔧 Setting up Presidio NLP engine...")
 
+            # Try to download spaCy model if not available
+            try:
+                import spacy
+                spacy.load("en_core_web_sm")
+            except OSError:
+                logger.info("📥 Downloading spaCy model...")
+                import subprocess
+                subprocess.run(["python", "-m", "spacy", "download", "en_core_web_sm"], check=True)
+
             # Configure NLP engine with spaCy
             configuration = {
                 "nlp_engine_name": "spacy",
