@@ -1,2 +1,2 @@
-# Minimal requirements for Railway deployment
-# Using only built-in Python modules for now
+# No external dependencies required
+# This gateway uses only Python built-in modules
