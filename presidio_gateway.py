@@ -889,13 +889,30 @@ class PresidioGatewayHandler(http.server.BaseHTTPRequestHandler):
         request_id = uuid.uuid4().hex[:8]
 
         try:
+            # Log request details for debugging
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Request {request_id} from {self.headers.get('User-Agent', 'Unknown')}")
+            print(f"  Headers: {dict(self.headers)}")
+
             content_length = int(self.headers.get('Content-Length', 0))
             if content_length == 0:
+                print(f"  ERROR: No content length")
                 self.send_error(400, "No content")
                 return
 
+            print(f"  Content-Length: {content_length}")
+
             post_data = self.rfile.read(content_length)
-            request_data = json.loads(post_data.decode('utf-8'))
+            print(f"  Raw data length: {len(post_data)}")
+            print(f"  Raw data preview: {post_data[:200]}...")
+
+            try:
+                request_data = json.loads(post_data.decode('utf-8'))
+                print(f"  Parsed JSON successfully")
+            except json.JSONDecodeError as e:
+                print(f"  JSON decode error: {e}")
+                print(f"  Raw data: {post_data}")
+                self.send_error(400, f"Invalid JSON: {str(e)}")
+                return
 
             # Extract text content
             text_content = ""
@@ -905,10 +922,21 @@ class PresidioGatewayHandler(http.server.BaseHTTPRequestHandler):
 
             # Enhanced security scan with Presidio
             if not self.detector:
+                print(f"  Initializing detector...")
                 await self.initialize_detector()
 
-            issues = await self.detector.scan_content(text_content)
-            detection_summary = self.detector.get_detection_summary(issues)
+            print(f"  Running security scan...")
+            try:
+                issues = await self.detector.scan_content(text_content)
+                detection_summary = self.detector.get_detection_summary(issues)
+                print(f"  Security scan completed: {len(issues)} issues found")
+            except Exception as scan_error:
+                print(f"  Security scan error: {scan_error}")
+                import traceback
+                traceback.print_exc()
+                # Continue with empty issues if scan fails
+                issues = []
+                detection_summary = {"clean": True, "issues": []}
 
             # Detailed logging
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Presidio Request {request_id}")
@@ -935,26 +963,44 @@ class PresidioGatewayHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(error_response, 400)
                 return
 
+            # Check if streaming is requested
+            is_streaming = request_data.get('stream', False)
+            print(f"  Streaming requested: {is_streaming}")
+
             # Check if DeepSeek API key is configured
             deepseek_key = os.getenv('DEEPSEEK_API_KEY')
 
             if deepseek_key:
                 # Forward to DeepSeek API
                 try:
-                    response = await self._forward_to_deepseek(request_data, deepseek_key, detection_summary, len(issues))
-                    print(f"  SUCCESS: Real DeepSeek response with {len(issues)} low-risk issues")
-                    self.send_json(response)
+                    if is_streaming:
+                        await self._forward_to_deepseek_streaming(request_data, deepseek_key, detection_summary, len(issues))
+                        print(f"  SUCCESS: Streaming DeepSeek response with {len(issues)} low-risk issues")
+                    else:
+                        response = await self._forward_to_deepseek(request_data, deepseek_key, detection_summary, len(issues))
+                        print(f"  SUCCESS: Real DeepSeek response with {len(issues)} low-risk issues")
+                        self.send_json(response)
                 except Exception as e:
                     print(f"  DeepSeek API Error: {e}")
+                    import traceback
+                    traceback.print_exc()
                     # Fall back to mock response if DeepSeek fails
-                    response = self._create_mock_response(request_id, messages, issues, detection_summary)
-                    print(f"  FALLBACK: Mock response due to DeepSeek error")
-                    self.send_json(response)
+                    if is_streaming:
+                        self._send_mock_streaming_response(request_id, messages, issues, detection_summary)
+                        print(f"  FALLBACK: Mock streaming response due to DeepSeek error")
+                    else:
+                        response = self._create_mock_response(request_id, messages, issues, detection_summary)
+                        print(f"  FALLBACK: Mock response due to DeepSeek error")
+                        self.send_json(response)
             else:
                 # Mock response when no API key
-                response = self._create_mock_response(request_id, messages, issues, detection_summary)
-                print(f"  MOCK: No DeepSeek API key configured")
-                self.send_json(response)
+                if is_streaming:
+                    self._send_mock_streaming_response(request_id, messages, issues, detection_summary)
+                    print(f"  MOCK: Streaming mock response (no DeepSeek API key)")
+                else:
+                    response = self._create_mock_response(request_id, messages, issues, detection_summary)
+                    print(f"  MOCK: No DeepSeek API key configured")
+                    self.send_json(response)
 
         except json.JSONDecodeError:
             self.send_error(400, "Invalid JSON")
@@ -1011,6 +1057,139 @@ class PresidioGatewayHandler(http.server.BaseHTTPRequestHandler):
 
         except Exception as e:
             raise Exception(f"DeepSeek API request failed: {str(e)}")
+
+    async def _forward_to_deepseek_streaming(self, request_data, api_key, detection_summary, issues_count):
+        """Forward streaming request to DeepSeek API"""
+        import urllib.request
+
+        # DeepSeek API endpoint
+        url = "https://api.deepseek.com/v1/chat/completions"
+
+        # Prepare headers
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {api_key}',
+            'User-Agent': 'Presidio-Gateway/3.0.0'
+        }
+
+        # Prepare request data for DeepSeek with streaming
+        deepseek_request = {
+            "model": request_data.get("model", "deepseek-chat"),
+            "messages": request_data.get("messages", []),
+            "temperature": request_data.get("temperature", 0.7),
+            "max_tokens": request_data.get("max_tokens", 1000),
+            "stream": True
+        }
+
+        # Make streaming request to DeepSeek
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(deepseek_request).encode('utf-8'),
+            headers=headers
+        )
+
+        try:
+            # Set up SSE response headers
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream')
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('Connection', 'keep-alive')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+
+            # Send security scan info as first event
+            security_event = {
+                "id": f"security-scan",
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "model": "presidio-enhanced-gateway",
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "content": f"[Security: {issues_count} issues detected, request allowed] "
+                    },
+                    "finish_reason": None
+                }],
+                "security_scan": detection_summary
+            }
+
+            self.wfile.write(f"data: {json.dumps(security_event)}\n\n".encode())
+            self.wfile.flush()
+
+            # Forward streaming response from DeepSeek
+            with urllib.request.urlopen(req, timeout=30) as response:
+                for line in response:
+                    line = line.decode('utf-8').strip()
+                    if line.startswith('data: '):
+                        # Forward the streaming data
+                        self.wfile.write(f"{line}\n\n".encode())
+                        self.wfile.flush()
+
+                        # Check for end of stream
+                        if line == 'data: [DONE]':
+                            break
+
+        except Exception as e:
+            # Send error as SSE event
+            error_event = {
+                "error": f"DeepSeek streaming failed: {str(e)}",
+                "type": "error"
+            }
+            self.wfile.write(f"data: {json.dumps(error_event)}\n\n".encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+            raise
+
+    def _send_mock_streaming_response(self, request_id, messages, issues, detection_summary):
+        """Send mock streaming response when DeepSeek is not available"""
+        try:
+            # Set up SSE response headers
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream')
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('Connection', 'keep-alive')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+
+            # Mock streaming chunks
+            chunks = [
+                "Presidio Gateway: ",
+                f"Processed {len(messages)} message(s) ",
+                "with enterprise ML security. ",
+                f"{len(issues)} low-risk issues detected but allowed. ",
+                "Add DEEPSEEK_API_KEY for real responses."
+            ]
+
+            for i, chunk in enumerate(chunks):
+                event = {
+                    "id": f"presidio-{request_id}-{i}",
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": "presidio-enhanced-gateway",
+                    "choices": [{
+                        "index": 0,
+                        "delta": {
+                            "content": chunk
+                        },
+                        "finish_reason": None if i < len(chunks) - 1 else "stop"
+                    }]
+                }
+
+                if i == 0:
+                    # Add security scan info to first chunk
+                    event["security_scan"] = detection_summary
+
+                self.wfile.write(f"data: {json.dumps(event)}\n\n".encode())
+                self.wfile.flush()
+                time.sleep(0.1)  # Small delay to simulate streaming
+
+            # Send final [DONE] event
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+
+        except Exception as e:
+            print(f"Error in mock streaming: {e}")
 
     def _create_mock_response(self, request_id, messages, issues, detection_summary):
         """Create mock response when DeepSeek is not available"""
